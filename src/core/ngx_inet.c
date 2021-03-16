@@ -634,7 +634,7 @@ ngx_get_addr_from_cidr(ngx_pool_t *pool, ngx_addr_t *addr,
 #if (NGX_HAVE_INET6)
     uint32_t              rv;
     u_char               *pa, *pm;
-    ngx_uint_t            i, j, shift;
+    ngx_int_t             i, j, shift;
     struct in6_addr       inaddr6;
     struct sockaddr_in6  *sin6;
 
