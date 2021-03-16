@@ -395,6 +395,7 @@ ngx_ptocidr(ngx_str_t *text, ngx_cidr_t *cidr)
 
         if (mask == NULL) {
             cidr->u.in.mask = 0xffffffff;
+            cidr->u.in.bits = 0;
             return NGX_OK;
         }
 
@@ -404,6 +405,7 @@ ngx_ptocidr(ngx_str_t *text, ngx_cidr_t *cidr)
 
         if (mask == NULL) {
             ngx_memset(cidr->u.in6.mask.s6_addr, 0xff, 16);
+            cidr->u.in6.bits = 0;
             return NGX_OK;
         }
 
@@ -426,6 +428,8 @@ ngx_ptocidr(ngx_str_t *text, ngx_cidr_t *cidr)
         if (shift > 128) {
             return NGX_ERROR;
         }
+
+        cidr->u.in6.bits = 128 - shift;
 
         addr = cidr->u.in6.addr.s6_addr;
         mask = cidr->u.in6.mask.s6_addr;
@@ -451,6 +455,8 @@ ngx_ptocidr(ngx_str_t *text, ngx_cidr_t *cidr)
         if (shift > 32) {
             return NGX_ERROR;
         }
+
+        cidr->u.in.bits = 32 - shift;
 
         if (shift) {
             cidr->u.in.mask = htonl((uint32_t) (0xffffffffu << (32 - shift)));
@@ -613,6 +619,113 @@ ngx_parse_addr(ngx_pool_t *pool, ngx_addr_t *addr, u_char *text, size_t len)
         sin->sin_addr.s_addr = inaddr;
         break;
     }
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
+ngx_get_addr_from_cidr(ngx_pool_t *pool, ngx_addr_t *addr,
+    ngx_cidr_t *cidr)
+{
+    size_t                len;
+    in_addr_t             inaddr, mask_len;
+    struct sockaddr_in   *sin;
+#if (NGX_HAVE_INET6)
+    uint32_t              rv;
+    u_char               *pa, *pm;
+    ngx_uint_t            i, j, shift;
+    struct in6_addr       inaddr6;
+    struct sockaddr_in6  *sin6;
+
+    /*
+     * prevent MSVC8 warning:
+     *    potentially uninitialized local variable 'inaddr6' used
+     */
+    ngx_memzero(&inaddr6, sizeof(struct in6_addr));
+#endif
+
+    if (cidr->family == AF_INET) {
+        len = sizeof(struct sockaddr_in);
+
+#if (NGX_HAVE_INET6)
+    } else if (cidr->family == AF_INET6) {
+        len = sizeof(struct sockaddr_in6);
+
+#endif
+    } else {
+        return NGX_DECLINED;
+    }
+
+    addr->sockaddr = ngx_pcalloc(pool, len);
+    if (addr->sockaddr == NULL) {
+        return NGX_ERROR;
+    }
+
+    addr->sockaddr->sa_family = (u_char) cidr->family;
+    addr->socklen = len;
+
+    switch (cidr->family) {
+
+#if (NGX_HAVE_INET6)
+    case AF_INET6:
+        sin6 = (struct sockaddr_in6 *) addr->sockaddr;
+        ngx_memcpy(sin6->sin6_addr.s6_addr, cidr->u.in6.addr.s6_addr, 16);
+
+        if (cidr->u.in6.bits == 0) {
+            goto done;
+        }
+
+        shift = cidr->u.in6.bits;
+        pa = sin6->sin6_addr.s6_addr;
+        pm = cidr->u.in6.mask.s6_addr;
+
+        rv = ngx_random();
+        j = 0;
+
+        for (i = 15; i >= 0; i--) {
+            pa[i] = pa[i] ^ ((pa[i] ^ rv) & ~pm[i]);
+
+            shift -= (shift > 8) ? 8 : shift;
+            if (shift == 0) break;
+
+            rv >>= 8;
+            if (++j > 2) {
+                rv = ngx_random();
+                j = 0;
+            }
+        }
+
+        break;
+#endif
+
+    default: /* AF_INET */
+        sin = (struct sockaddr_in *) addr->sockaddr;
+
+        if (cidr->u.in.bits == 0 ) {
+            sin->sin_addr.s_addr = cidr->u.in.addr;
+            goto done;
+        }
+
+        mask_len = 0xffffffffu - ntohl(cidr->u.in.mask);
+
+        inaddr = (ntohl(cidr->u.in.addr) & ~mask_len)
+                 | (mask_len & (uint32_t) ngx_random());
+
+        sin->sin_addr.s_addr = htonl(inaddr);
+
+        break;
+    }
+
+done:
+
+    addr->name.data = ngx_pnalloc(pool, NGX_SOCKADDR_STRLEN);
+    if (addr->name.data == NULL) {
+        return NGX_ERROR;
+    }
+
+    addr->name.len = ngx_sock_ntop(addr->sockaddr, addr->socklen,
+                          (u_char *) addr->name.data, NGX_SOCKADDR_STRLEN, 0);
 
     return NGX_OK;
 }

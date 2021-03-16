@@ -47,6 +47,7 @@ typedef union {
 typedef struct {
     in_addr_t                 addr;
     in_addr_t                 mask;
+    ngx_uint_t                bits;
 } ngx_in_cidr_t;
 
 
@@ -55,6 +56,7 @@ typedef struct {
 typedef struct {
     struct in6_addr           addr;
     struct in6_addr           mask;
+    ngx_uint_t                bits;
 } ngx_in6_cidr_t;
 
 #endif
@@ -118,6 +120,8 @@ ngx_int_t ngx_ptocidr(ngx_str_t *text, ngx_cidr_t *cidr);
 ngx_int_t ngx_cidr_match(struct sockaddr *sa, ngx_array_t *cidrs);
 ngx_int_t ngx_parse_addr(ngx_pool_t *pool, ngx_addr_t *addr, u_char *text,
     size_t len);
+ngx_int_t ngx_get_addr_from_cidr(ngx_pool_t *pool, ngx_addr_t *addr,
+    ngx_cidr_t *cidr);
 ngx_int_t ngx_parse_addr_port(ngx_pool_t *pool, ngx_addr_t *addr,
     u_char *text, size_t len);
 ngx_int_t ngx_parse_url(ngx_pool_t *pool, ngx_url_t *u);

@@ -140,6 +140,7 @@ struct ngx_http_upstream_srv_conf_s {
 typedef struct {
     ngx_addr_t                      *addr;
     ngx_http_complex_value_t        *value;
+    ngx_cidr_t                       cidr;
 #if (NGX_HAVE_TRANSPARENT_PROXY)
     ngx_uint_t                       transparent; /* unsigned  transparent:1; */
 #endif

@@ -13,6 +13,7 @@
 typedef struct {
     ngx_addr_t                      *addr;
     ngx_stream_complex_value_t      *value;
+    ngx_cidr_t                       cidr;
 #if (NGX_HAVE_TRANSPARENT_PROXY)
     ngx_uint_t                       transparent; /* unsigned  transparent:1; */
 #endif
@@ -643,13 +644,36 @@ ngx_stream_proxy_set_local(ngx_stream_session_t *s, ngx_stream_upstream_t *u,
         return NGX_OK;
     }
 
+    addr = ngx_palloc(s->connection->pool, sizeof(ngx_addr_t));
+    if (addr == NULL) {
+        return NGX_ERROR;
+    }
+
 #if (NGX_HAVE_TRANSPARENT_PROXY)
     u->peer.transparent = local->transparent;
 #endif
 
     if (local->value == NULL) {
-        u->peer.local = local->addr;
-        return NGX_OK;
+        switch (local->cidr.family) {
+
+        case AF_INET:
+            if (local->cidr.u.in.bits == 0) {
+                u->peer.local = local->addr;
+                return NGX_OK;
+            }
+            break;
+
+#if (NGX_HAVE_INET6)
+        case AF_INET6:
+            if (local->cidr.u.in6.bits == 0) {
+                u->peer.local = local->addr;
+                return NGX_OK;
+            }
+            break;
+#endif
+        }
+
+        goto refresh_addr;
     }
 
     if (ngx_stream_complex_value(s, local->value, &val) != NGX_OK) {
@@ -660,23 +684,40 @@ ngx_stream_proxy_set_local(ngx_stream_session_t *s, ngx_stream_upstream_t *u,
         return NGX_OK;
     }
 
-    addr = ngx_palloc(s->connection->pool, sizeof(ngx_addr_t));
-    if (addr == NULL) {
-        return NGX_ERROR;
-    }
+    rc = ngx_ptocidr(&val, &local->cidr);
 
-    rc = ngx_parse_addr_port(s->connection->pool, addr, val.data, val.len);
     if (rc == NGX_ERROR) {
+        rc = ngx_parse_addr_port(s->connection->pool, addr, val.data, val.len);
+
+        if (rc == NGX_ERROR) {
+            return NGX_ERROR;
+        }
+
+        if (rc != NGX_OK) {
+            ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
+                          "invalid local address/CIDR \"%V\"", &val);
+            return NGX_OK;
+        }
+
+        addr->name = val;
+
+        goto done;
+    }
+
+    if (rc == NGX_DONE) {
+        ngx_log_error(NGX_LOG_WARN, s->connection->log, 0,
+                      "low address bits of %V are meaningless", &val);
+    }
+
+refresh_addr:
+
+    rc = ngx_get_addr_from_cidr(s->connection->pool, addr, &local->cidr);
+    if (rc != NGX_OK) {
         return NGX_ERROR;
     }
 
-    if (rc != NGX_OK) {
-        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0,
-                      "invalid local address \"%V\"", &val);
-        return NGX_OK;
-    }
+done:
 
-    addr->name = val;
     u->peer.local = addr;
 
     return NGX_OK;
@@ -2308,21 +2349,39 @@ ngx_stream_proxy_bind(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
             return NGX_CONF_ERROR;
         }
 
-        rc = ngx_parse_addr_port(cf->pool, local->addr, value[1].data,
-                                 value[1].len);
+        rc = ngx_ptocidr(&value[1], &local->cidr);
 
-        switch (rc) {
-        case NGX_OK:
-            local->addr->name = value[1];
-            break;
+        if (rc == NGX_ERROR) {
+            rc = ngx_parse_addr_port(cf->pool, local->addr, value[1].data,
+                                     value[1].len);
 
-        case NGX_DECLINED:
-            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
-                               "invalid address \"%V\"", &value[1]);
-            /* fall through */
+            switch (rc) {
+            case NGX_OK:
+                local->addr->name = value[1];
+                break;
 
-        default:
-            return NGX_CONF_ERROR;
+            case NGX_DECLINED:
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                                   "invalid address/CIDR \"%V\"", &value[1]);
+                /* fall through */
+
+            default:
+                return NGX_CONF_ERROR;
+            }
+
+        } else {
+            if (rc == NGX_DONE) {
+                ngx_conf_log_error(NGX_LOG_WARN, cf, 0,
+                         "low address bits of %V are meaningless", &value[1]);
+            }
+
+            rc = ngx_get_addr_from_cidr(cf->pool, local->addr, &local->cidr);
+
+            if (rc != NGX_OK) {
+                ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                         "could not get address from CIDR \"%V\"", &value[1]);
+                return NGX_CONF_ERROR;
+            }
         }
     }
 
